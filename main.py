@@ -20,5 +20,5 @@ async def startMain(host, port, senderCompID, targetCompID, username, password, 
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(startMain('fixmd.iris-x.net', '18037', 'testclient_HNMD', 'ErisX', 'testclient_HNMD', 'testclient_HNMD', 'FIX.4.4', loop))
+    loop.run_until_complete(startMain('host', 'port', 'username', 'target', 'user', 'passwd', 'FIX.4.4', loop))
     loop.run_forever()
