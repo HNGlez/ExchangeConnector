@@ -102,7 +102,7 @@ class FIXConnectionHandler(object):
             # Unexpected sequence number. Send resend request
             logger.info(f"Sending Resend Request of messages: {expectedSeqNo} to {recvSeqNo}")
             msg = self._clientMessage.sendResendRequest(expectedSeqNo, recvSeqNo)
-            self.sendMessage(msg)
+            await self.sendMessage(msg)
         else:
             self._session.updateRecvSeqNo(recvSeqNo)
     

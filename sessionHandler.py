@@ -17,7 +17,7 @@ class FIXSessionHandler:
         self._senderCompID = senderCompID
 
         self._outboundSeqNo = 0
-        self._nextExpectedSeqNo = 0
+        self._nextExpectedSeqNo = 1
 
     def validateCompIDs(self, targetCompID, senderCompID):
         return self._targetCompID == targetCompID and self._senderCompID == senderCompID
