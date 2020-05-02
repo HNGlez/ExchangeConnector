@@ -17,7 +17,7 @@ from connectionHandler import FIXConnectionHandler, SocketConnectionState
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-logging.basicConfig(filename=sys.stdout, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 class FixEngine(FIXConnectionHandler):
@@ -30,39 +30,41 @@ class FixEngine(FIXConnectionHandler):
         self._password = password
         self._heartbeatInterval = heartbeatInterval
         self._logout = False
-        self._clientMessage = FixClientMessages(senderCompID, targetCompID, username, password, fixVersion, heartbeatInterval)
-        asyncio.ensure_future(self.logon())
-        asyncio.ensure_future(self.handleHearbeat())
+        self.clientMessage = FixClientMessages(senderCompID, targetCompID, username, password, fixVersion, heartbeatInterval)
+        asyncio.ensure_future(self._handleEngine())
     
     def getConnectionState(self):
         return self._connectionState
 
-    def sessionMessageHandler(self, message: simplefix.FixMessage) -> bool:
+    async def _sessionMessageHandler(self, message: simplefix.FixMessage) -> bool:
         """ Handle Session Message."""
         assert isinstance(message, simplefix.FixMessage)
 
-        msgType = message.get(35)
-        print("Processing business Message")
-        print(msgType)
-        if msgType == b'A': # Handle logon
+        msgType = message.get(simplefix.TAG_MSGTYPE)
+        if msgType == simplefix.MSGTYPE_LOGON: # Handle logon
             if self._connectionState == SocketConnectionState.LOGGED_IN:
                 logger.warning(f"{self._senderCompID} already looged in -> Ignoring Login Request.")
             else:
                 self._connectionState = SocketConnectionState.LOGGED_IN
-                self._heartbeatInterval = float(message.get(108))
+                self._heartbeatInterval = float(message.get(simplefix.TAG_HEARTBTINT))
                 return True
         elif self._connectionState == SocketConnectionState.LOGGED_IN:
-            if msgType == b'1': # Send test heartbeat when requested
-                msg = self._clientMessage.sendHeartbeat()
+            if msgType == simplefix.MSGTYPE_TEST_REQUEST: # Send test heartbeat when requested
+                msg = self.clientMessage.sendHeartbeat()
                 msg.append_pair(112, message.get(112))
-                self.sendMessage(msg)
+                await self.sendMessage(msg)
                 return True
-            elif msgType == b'5': # Handle Logout
+            elif msgType == simplefix.MSGTYPE_LOGOUT: # Handle Logout
                 self._connectionState = SocketConnectionState.LOGGED_OUT
                 self.handleClose()
                 return True
+            elif msgType == simplefix.MSGTYPE_HEARTBEAT:
+                msg = self.clientMessage.sendHeartbeat()
+                msg.append_pair(112, message.get(112))
+                await self.sendMessage(msg)
+                return True
             elif message.get(141) == b'Y': # If ResetSeqNum = Y Then Reset sequence
-                self._sequenceNum = 1
+                self._session.resetSeqNo()
                 logger.info("Resetting Sequence Number to 1")
                 return True
             else:
@@ -71,20 +73,15 @@ class FixEngine(FIXConnectionHandler):
             logger.warning(f"Cannot process message. {self._senderCompID} is not logged in.")
             return False
 
-    async def logon(self):
-        print("Logon")
-        msg = self._clientMessage.sendLogOn()
-        await self.sendMessage(msg)
+    async def _handleEngine(self):
+        await self.logon()
 
-    async def handleHearbeat(self):
-        while True:
-            print("Start wait")
-            await asyncio.sleep(self._heartbeatInterval)
-            print("Finish wait")
-            print(self._connectionState)
-            if self._connectionState == SocketConnectionState.LOGGED_IN:
-                msg = self._clientMessage.sendHeartbeat()
-                await self.sendMessage(msg)
+        while self._connectionState != SocketConnectionState.DISCONNECTED:
+            if self._connectionState != SocketConnectionState.LOGGED_OUT:
+                await self.readMessage()
+                await self.expectedHeartbeat(self._heartbeatInterval)
+            else:
+                await self.logon()
 
             
 class FIXClient:
