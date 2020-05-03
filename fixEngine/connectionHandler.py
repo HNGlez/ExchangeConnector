@@ -34,7 +34,7 @@ from sessionHandler import FIXSessionHandler
 import queue
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-logging.basicConfig(filename='logs/fix_logs.log', format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# logging.basicConfig(filename='logs/fix_logs.log', format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 class SocketConnectionState(Enum):
     UNKOWN = 0
@@ -44,23 +44,20 @@ class SocketConnectionState(Enum):
     DISCONNECTED = 4
 
 class FIXConnectionHandler(object):
-    def __init__(self, senderCompID, targetCompID, reader, writer, messageListener, fixVersion="FIX.4.4", maxMissedHeartbeats=3, logonInterval=1, maxLogonAttempts=5):
+    def __init__(self, config, reader, writer, messageListener):
+        self._config = config
         self._connectionState = SocketConnectionState.CONNECTED
-        self._senderCompID = senderCompID
         self._reader = reader
         self._writer = writer
         self._sequenceNum = 0
         self.fixParser = simplefix.FixParser()
-        self._fixProtocol = fixVersion
-        self._session = FIXSessionHandler(targetCompID, senderCompID)
+        self._session = FIXSessionHandler(config["TargetCompID"], config["SenderCompID"])
         self.clientMessage = None
         self._listener = messageListener
         self._lastRcvMsg = None
         self._missedHeartbeats = 0
-        self._maxMissedHeartbeats = maxMissedHeartbeats
+        self._lastLogonAttempt = 0
         self._logonCount = 0
-        self._logonInterval = logonInterval
-        self._maxLogonAttempts = maxLogonAttempts
         self._bufferSize = 128
 
     async def disconnect(self):
@@ -72,7 +69,7 @@ class FIXConnectionHandler(object):
     async def handleClose(self):
         """ Handle Close Writer Socket Connection."""
         if self._connectionState == SocketConnectionState.DISCONNECTED:
-            logger.info(f"{self._senderCompID} session -> DISCONNECTED")
+            logger.info(f"{self._config['SenderCompID']} session -> DISCONNECTED")
             self._writer.close()
             self._connectionState = SocketConnectionState.DISCONNECTED
     
@@ -86,12 +83,10 @@ class FIXConnectionHandler(object):
         self._lastMsgSent = time.time()
 
         logger.info(f"Client Sending Message: {FIXConnectionHandler.printFix(message.encode())}")
-        print(f"Client Sending Message:   {FIXConnectionHandler.printFix(message.encode())}")
     
     async def readMessage(self):
         try:
             message = None
-            print("Reading")
             while message is None:
                 buffer = await self._reader.read(self._bufferSize)
                 if not buffer:
@@ -102,16 +97,13 @@ class FIXConnectionHandler(object):
 
             if message is None:
                 return
-            logger.info(f"{self._senderCompID} Received Message: {message}")
-            print("Receiving", message)
+            logger.info(f"{self._config['SenderCompID']} Received Message: {message}")
             assert isinstance(message, simplefix.FixMessage)
             await self.processMessage(message)
         except ConnectionError as e:
             logger.error("Connection Closed.", exc_info=True)
-            print(e)
         except asyncio.CancelledError as e:
-            logger.error(f"{self._senderCompID} Read Message Timed Out")
-            print(e)
+            logger.error(f"{self._config['SenderCompID']} Read Message Timed Out")
     
     async def processMessage(self, message: simplefix.FixMessage):
         print("Processing Message")
@@ -120,8 +112,8 @@ class FIXConnectionHandler(object):
         self._missedHeartbeats = 0
         beginString = message.get(8).decode()
 
-        if beginString != self._fixProtocol:
-            logger.warning(f"FIX Protocol is incorrect. Expected: {self._fixProtocol}; Received: {beginString}")
+        if beginString != self._config['BeginString']:
+            logger.warning(f"FIX Protocol is incorrect. Expected: {self._config['BeginString']}; Received: {beginString}")
             await self.disconnect()
             return
         
@@ -142,18 +134,17 @@ class FIXConnectionHandler(object):
         await self._listener(message)
 
     async def logon(self):
-        if self._logonCount >= self._maxLogonAttempts:
+        if self._logonCount >= self._config.getint('MaxReconnectAttemps'):
             logger.warning("Max Logon attemps reached. Disconnecting")
             self.disconnect()
-        logger.info(f"{self._senderCompID} session -> Sending LOGON")
-        print("Logon")
-        msg = self.clientMessage.sendLogOn()
-        await self.sendMessage(msg)
-        await asyncio.sleep(self._logonInterval)
+        logger.info(f"{self._config['SenderCompID']} session -> Sending LOGON")
+        if time.time() - self._lastLogonAttempt > self._config.getint('ReconnectInterval'):
+            msg = self.clientMessage.sendLogOn()
+            await self.sendMessage(msg)
+            self._lastLogonAttempt = time.time()
 
     async def logout(self):
-        logger.info(f"{self._senderCompID} session -> Sending LOGOUT")
-        print("logout")
+        logger.info(f"{self._config['SenderCompID']} session -> Sending LOGOUT")
         self._connectionState = SocketConnectionState.LOGGED_OUT
         await self.sendMessage(self.clientMessage.sendLogOut())
 
@@ -163,7 +154,7 @@ class FIXConnectionHandler(object):
         if time.time() - self._lastRcvMsg > heartbeatInterval:
             logger.warning(f"Heartbeat expected not received. Missed Heartbeats: {self._missedHeartbeats}")
             self._missedHeartbeats += 1
-        if self._missedHeartbeats >= self._maxMissedHeartbeats:
+        if self._missedHeartbeats >= self._config.getint('MaxMissedHeartBeats'):
             logger.warning(f"Max Missed Heartbeats reached. Loging out")
             self.logout()
 

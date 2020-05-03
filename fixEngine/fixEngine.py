@@ -30,6 +30,7 @@ import threading
 import logging
 import time
 import sys
+import configparser
 from fixClientMessages import FixClientMessages
 from connectionHandler import FIXConnectionHandler, SocketConnectionState
 
@@ -40,15 +41,11 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 class FixEngine(FIXConnectionHandler):
 
-    def __init__(self, senderCompID, targetCompID, username, password, reader, writer, messageListener, fixVersion="FIX.4.4", heartbeatInterval=10, readTimeOut=30, writeTimeOut=10):
-        FIXConnectionHandler.__init__(self, senderCompID, targetCompID, reader, writer, messageListener, fixVersion)
-        self._senderCompID = senderCompID
-        self._targetCompID = targetCompID
-        self._username = username
-        self._password = password
-        self._heartbeatInterval = heartbeatInterval
+    def __init__(self, config, reader, writer, messageListener):
+        FIXConnectionHandler.__init__(self, config, reader, writer, messageListener)
+        self._config = config
         self._logout = False
-        self.clientMessage = FixClientMessages(senderCompID, targetCompID, username, password, fixVersion, heartbeatInterval)
+        self.clientMessage = FixClientMessages(config['SenderCompID'], config['TargetCompID'], config['SenderPassword'], config['BeginString'], config.getint('HeartBeatInterval'))
         asyncio.ensure_future(self._handleEngine())
     
     def getConnectionState(self):
@@ -57,14 +54,15 @@ class FixEngine(FIXConnectionHandler):
     async def _sessionMessageHandler(self, message: simplefix.FixMessage) -> bool:
         """ Handle Session Message."""
         assert isinstance(message, simplefix.FixMessage)
+        # NEED TO ADD HANDLING OF BUSINESS REJECTS
 
         msgType = message.get(simplefix.TAG_MSGTYPE)
         if msgType == simplefix.MSGTYPE_LOGON: # Handle logon
             if self._connectionState == SocketConnectionState.LOGGED_IN:
-                logger.warning(f"{self._senderCompID} already looged in -> Ignoring Login Request.")
+                logger.warning(f"{self._config['SenderCompID']} already looged in -> Ignoring Login Request.")
             else:
                 self._connectionState = SocketConnectionState.LOGGED_IN
-                self._heartbeatInterval = float(message.get(simplefix.TAG_HEARTBTINT))
+                self._config['HeartBeatInterval'] = str(message.get(simplefix.TAG_HEARTBTINT).decode())
                 return True
         elif self._connectionState == SocketConnectionState.LOGGED_IN:
             if msgType == simplefix.MSGTYPE_TEST_REQUEST: # Send test heartbeat when requested
@@ -88,7 +86,7 @@ class FixEngine(FIXConnectionHandler):
             else:
                 return False
         else:
-            logger.warning(f"Cannot process message. {self._senderCompID} is not logged in.")
+            logger.warning(f"Cannot process message. {self._config['SenderCompID']} is not logged in.")
             return False
 
     async def _handleEngine(self):
@@ -97,36 +95,34 @@ class FixEngine(FIXConnectionHandler):
         while self._connectionState != SocketConnectionState.DISCONNECTED:
             if self._connectionState != SocketConnectionState.LOGGED_OUT:
                 await self.readMessage()
-                await self.expectedHeartbeat(self._heartbeatInterval)
+                await self.expectedHeartbeat(self._config.getint('HeartBeatInterval'))
             else:
                 await self.logon()
 
             
 class FIXClient:
-    def __init__(self, host, port, senderCompID, targetCompID, username, password, listener=None, fixVersion="FIX.4.4", heartbeatInterval=10, readTimeOut=30, writeTimeOut=10):
-        self._host = host
-        self._port = port
-        self._senderCompID = senderCompID
-        self._targetCompID = targetCompID
-        self._username = username
-        self._password = password
-        self._fixVersion = fixVersion
-        self._heartbeatInterval = heartbeatInterval
-        self._readTimeOut = readTimeOut
-        self._writeTimeOut = writeTimeOut
+    def __init__(self, configFile, gateway, listener):
+        self._config = self.loadConfig(configFile, gateway)
         self._reader = None
         self._writer = None
         self._client = None
         self._messageListener = listener
 
-    async def startClient(self, host, port, loop):
+    async def startClient(self, loop):
         """ Creates Socket Connection and Runs Main Loop."""
-        self._reader, self._writer = await asyncio.open_connection(self._host, self._port, loop=loop)
+        self._reader, self._writer = await asyncio.open_connection(self._config["SocketHost"], self._config["SocketPort"], loop=loop)
         self._connectionState = SocketConnectionState.CONNECTED
-        logger.info(f"Socket Connection Open to {self._host}:{self._port}")
-        print(f"Socket Connection Open to {self._host}:{self._port}")
+        logger.info(f"Socket Connection Open to {self._config['SocketHost']}:{self._config['SocketPort']}")
 
-        self._client = FixEngine(self._senderCompID, self._targetCompID, self._username, self._password, self._reader, self._writer, self._messageListener, heartbeatInterval=10, readTimeOut=30, writeTimeOut=10)
+        self._client = FixEngine(self._config, self._reader, self._writer, self._messageListener)
+
+    def loadConfig(self, filePath, gateway):
+        parser = configparser.SafeConfigParser()
+        parser.read(filePath)
+        if parser.has_section(gateway):
+            return parser[gateway]
+        else:
+            raise Exception(f"{gateway} section not found in configuration file {filePath}")
 
     def getClient(self):
         return self._client

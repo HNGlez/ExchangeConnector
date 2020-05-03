@@ -28,18 +28,17 @@ import simplefix
 import time
 
 class FixClientMessages():
-    def __init__(self, senderCompID, targetComptID, username, password, fixVersion="FIX.4.4", heartbeatInterval=60):
+    def __init__(self, senderCompID, targetComptID, password, fixVersion, heartbeatInterval):
         self._senderCompID = senderCompID
         self._targetCompID = targetComptID
-        self._username = username
         self._password = password
         self._fixVersion = fixVersion
         self._heartbeatInterval = heartbeatInterval
         self._requestID = None
 
-    def createMessage(self, messageType: str) -> simplefix.FixMessage():
+    def createMessage(self, messageType: bytes) -> simplefix.FixMessage():
         """ Creates Basic Structure of FIX Message. """
-        assert isinstance(messageType, str)
+        assert isinstance(messageType, bytes)
         assert len(messageType) == 1
 
         msg = simplefix.FixMessage()

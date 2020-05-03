@@ -27,7 +27,7 @@ import logging
 import simplefix
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-logging.basicConfig(filename='logs/fix_logs.log', format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# logging.basicConfig(filename='logs/fix_logs.log', format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 class FIXSessionHandler:
     def __init__(self, targetCompID, senderCompID):
