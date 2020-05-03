@@ -69,7 +69,7 @@ class FixEngine(FIXConnectionHandler):
         elif self._connectionState == SocketConnectionState.LOGGED_IN:
             if msgType == simplefix.MSGTYPE_TEST_REQUEST: # Send test heartbeat when requested
                 msg = self.clientMessage.sendHeartbeat()
-                msg.append_pair(112, message.get(112))
+                msg.append_pair(simplefix.TAG_TESTREQID, message.get(simplefix.TAG_TESTREQID))
                 await self.sendMessage(msg)
                 return True
             elif msgType == simplefix.MSGTYPE_LOGOUT: # Handle Logout
@@ -78,10 +78,10 @@ class FixEngine(FIXConnectionHandler):
                 return True
             elif msgType == simplefix.MSGTYPE_HEARTBEAT:
                 msg = self.clientMessage.sendHeartbeat()
-                msg.append_pair(112, message.get(112))
+                msg.append_pair(simplefix.TAG_TESTREQID, message.get(simplefix.TAG_TESTREQID))
                 await self.sendMessage(msg)
                 return True
-            elif message.get(141) == b'Y': # If ResetSeqNum = Y Then Reset sequence
+            elif message.get(simplefix.TAG_RESETSEQNUMFLAG) == simplefix.RESETSEQNUMFLAG_YES: # If ResetSeqNum = Y Then Reset sequence
                 self._session.resetSeqNo()
                 logger.info("Resetting Sequence Number to 1")
                 return True
