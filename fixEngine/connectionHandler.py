@@ -29,6 +29,7 @@ import sys
 import simplefix
 import logging
 import time
+import json
 from enum import Enum
 from sessionHandler import FIXSessionHandler
 
@@ -47,7 +48,6 @@ class FIXConnectionHandler(object):
         self._writer = writer
         self._sequenceNum = 0
         self.fixParser = simplefix.FixParser()
-        self._session = FIXSessionHandler(config["TargetCompID"], config["SenderCompID"])
         self.clientMessage = None
         self._listener = messageListener
         self._lastRcvMsg = None
@@ -57,6 +57,7 @@ class FIXConnectionHandler(object):
         self._bufferSize = 128
         self._fixLogger = self.setupLogger(name=config["BeginString"],filename=f"{config['SenderCompID']}-fixMessages")
         self._engineLogger = self.setupLogger(name=config["SenderCompID"], filename=f"{config['SenderCompID']}-session", formatter="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        self._session = FIXSessionHandler(config["TargetCompID"], config["SenderCompID"], config["ResetSequenceOnLogon"], self._engineLogger, config["FileLogPath"])
 
 
     def setupLogger(self, name, filename, level=logging.INFO, formatter="%(asctime)s - %(message)s"):
@@ -75,10 +76,16 @@ class FIXConnectionHandler(object):
 
     async def handleClose(self):
         """ Handle Close Writer Socket Connection."""
-        if self._connectionState == SocketConnectionState.DISCONNECTED:
+        if self._connectionState != SocketConnectionState.DISCONNECTED:
             self._engineLogger.info(f"{self._config['SenderCompID']} session -> DISCONNECTED")
             self._writer.close()
             self._connectionState = SocketConnectionState.DISCONNECTED
+            stateSeqNum = {"outboundSeqNo": self._session.getOutboundSeqNo(), "nextExpectedSeqNo": self._session.getNextExpectedSeqNo()}
+            with open(f"{self._config['FileLogPath']}/{self._config['SenderCompID']}-seqNums.json", 'w') as f:
+                json.dump(stateSeqNum, f)
+            print("disconnected")
+
+
     
     async def sendMessage(self, message: simplefix.FixMessage):
         """ Send FIX Message to Server."""
@@ -119,7 +126,6 @@ class FIXConnectionHandler(object):
             raise e
     
     async def processMessage(self, message: simplefix.FixMessage):
-        print("Processing Message")
         
         self._lastRcvMsg = time.time()
         self._missedHeartbeats = 0
@@ -152,7 +158,7 @@ class FIXConnectionHandler(object):
             self.disconnect()
         self._engineLogger.info(f"{self._config['SenderCompID']} session -> Sending LOGON")
         if time.time() - self._lastLogonAttempt > self._config.getint('ReconnectInterval'):
-            msg = self.clientMessage.sendLogOn()
+            msg = self.clientMessage.sendLogOn(self._config["ResetSequenceOnLogon"])
             await self.sendMessage(msg)
             self._lastLogonAttempt = time.time()
 

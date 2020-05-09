@@ -79,8 +79,7 @@ class FixEngine(FIXConnectionHandler):
                 await self.sendMessage(msg)
                 return True
             elif message.get(simplefix.TAG_RESETSEQNUMFLAG) == simplefix.RESETSEQNUMFLAG_YES: # If ResetSeqNum = Y Then Reset sequence
-                self._session.resetSeqNo()
-                self._engineLogger.info("Resetting Sequence Number to 1")
+                self._session.updateRecvSeqNo(message.get(simplefix.TAG_MSGSEQNUM))
                 return True
             else:
                 return False
@@ -92,11 +91,12 @@ class FixEngine(FIXConnectionHandler):
         await self.logon()
 
         while self._connectionState != SocketConnectionState.DISCONNECTED:
-            if self._connectionState != SocketConnectionState.LOGGED_OUT:
-                await self.readMessage()
-                await self.expectedHeartbeat(self._config.getint('HeartBeatInterval'))
-            else:
+            await self.readMessage()
+            await self.expectedHeartbeat(self._config.getint('HeartBeatInterval'))
+            if self._connectionState == SocketConnectionState.LOGGED_OUT:
                 await self.logon()
+        print("Exiting")
+        return
 
             
 class FIXClient:

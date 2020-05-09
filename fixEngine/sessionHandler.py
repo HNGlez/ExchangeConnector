@@ -25,24 +25,40 @@ SOFTWARE.
 """
 import logging
 import simplefix
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-# logging.basicConfig(filename='logs/fix_logs.log', format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+from os import path
+import json
 
 class FIXSessionHandler:
-    def __init__(self, targetCompID, senderCompID):
+    def __init__(self, targetCompID, senderCompID, resetSeqNum, enginelogger, logPath):
         self._targetCompID = targetCompID
         self._senderCompID = senderCompID
+        self._engineLogger = enginelogger
+        if resetSeqNum == "Y":
+            self._outboundSeqNo = 0
+            self._nextExpectedSeqNo = 1
+        elif resetSeqNum == "N" and path.exists(f"{logPath}/{self._senderCompID}-seqNums.json"):
+            with open(f"{logPath}/{self._senderCompID}-seqNums.json", 'r') as f:
+                seqNums = json.load(f)
+                self._outboundSeqNo = seqNums["outboundSeqNo"]
+                self._nextExpectedSeqNo = seqNums["nextExpectedSeqNo"]
+        else:
+            self._engineLogger.error("resetSeqNum Flag not set to Y but previous sequence numbers not found")
+            raise Exception(f"File not found: {logPath}/{self._senderCompID}-seqNums.json")
 
-        self._outboundSeqNo = 0
-        self._nextExpectedSeqNo = 1
+            
+
+    def getOutboundSeqNo(self):
+        return self._outboundSeqNo
+    
+    def getNextExpectedSeqNo(self):
+        return self._nextExpectedSeqNo
 
     def validateCompIDs(self, targetCompID, senderCompID):
         return self._targetCompID == targetCompID and self._senderCompID == senderCompID
     
     def validateRecvSeqNo(self, msgSeqNo):
-        if self._nextExpectedSeqNo < int(msgSeqNo):
-            logger.warning(f"Received Sequence Number not expected. Received: {msgSeqNo}; Expected {self._nextExpectedSeqNo}")
+        if self._nextExpectedSeqNo != int(msgSeqNo):
+            self._engineLogger.warning(f"Received Sequence Number not expected. Received: {msgSeqNo}; Expected {self._nextExpectedSeqNo}")
             return False, self._nextExpectedSeqNo
         else:
             return True, msgSeqNo
@@ -50,7 +66,8 @@ class FIXSessionHandler:
     def resetSeqNo(self):
         self._outboundSeqNo = 0
         self._nextExpectedSeqNo = 1
-    
+        self._engineLogger.info("Resetting Both Sequence Numbers")
+
     def updateRecvSeqNo(self, msgSeqNo):
         self._nextExpectedSeqNo = int(msgSeqNo) + 1
 
@@ -58,4 +75,4 @@ class FIXSessionHandler:
         """ Append Correct Sequence Number to FIX Message."""
         assert isinstance(message, simplefix.FixMessage)
         self._outboundSeqNo += 1
-        message.append_pair(34, self._outboundSeqNo, header=True)        
+        message.append_pair(34, self._outboundSeqNo, header=True)
