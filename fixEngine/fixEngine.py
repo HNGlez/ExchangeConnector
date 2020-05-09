@@ -34,10 +34,6 @@ import configparser
 from fixClientMessages import FixClientMessages
 from connectionHandler import FIXConnectionHandler, SocketConnectionState
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
 
 class FixEngine(FIXConnectionHandler):
 
@@ -45,6 +41,7 @@ class FixEngine(FIXConnectionHandler):
         FIXConnectionHandler.__init__(self, config, reader, writer, messageListener)
         self._config = config
         self._logout = False
+        self._engineLogger.info(f"Socket Connection Open to {config['SocketHost']}:{config['SocketPort']}")
         self.clientMessage = FixClientMessages(config['SenderCompID'], config['TargetCompID'], config['SenderPassword'], config['BeginString'], config.getint('HeartBeatInterval'))
         asyncio.ensure_future(self._handleEngine())
     
@@ -59,9 +56,10 @@ class FixEngine(FIXConnectionHandler):
         msgType = message.get(simplefix.TAG_MSGTYPE)
         if msgType == simplefix.MSGTYPE_LOGON: # Handle logon
             if self._connectionState == SocketConnectionState.LOGGED_IN:
-                logger.warning(f"{self._config['SenderCompID']} already looged in -> Ignoring Login Request.")
+                self._engineLogger.warning(f"{self._config['SenderCompID']} already looged in -> Ignoring Login Request.")
             else:
                 self._connectionState = SocketConnectionState.LOGGED_IN
+                self._engineLogger.info(f"{self._config['SenderCompID']} session -> LOGON")
                 self._config['HeartBeatInterval'] = str(message.get(simplefix.TAG_HEARTBTINT).decode())
                 return True
         elif self._connectionState == SocketConnectionState.LOGGED_IN:
@@ -72,6 +70,7 @@ class FixEngine(FIXConnectionHandler):
                 return True
             elif msgType == simplefix.MSGTYPE_LOGOUT: # Handle Logout
                 self._connectionState = SocketConnectionState.LOGGED_OUT
+                self._engineLogger.info(f"{self._config['SenderCompID']} session -> LOGOUT")
                 self.handleClose()
                 return True
             elif msgType == simplefix.MSGTYPE_HEARTBEAT:
@@ -81,12 +80,12 @@ class FixEngine(FIXConnectionHandler):
                 return True
             elif message.get(simplefix.TAG_RESETSEQNUMFLAG) == simplefix.RESETSEQNUMFLAG_YES: # If ResetSeqNum = Y Then Reset sequence
                 self._session.resetSeqNo()
-                logger.info("Resetting Sequence Number to 1")
+                self._engineLogger.info("Resetting Sequence Number to 1")
                 return True
             else:
                 return False
         else:
-            logger.warning(f"Cannot process message. {self._config['SenderCompID']} is not logged in.")
+            self._engineLogger.warning(f"Cannot process message. {self._config['SenderCompID']} is not logged in.")
             return False
 
     async def _handleEngine(self):
@@ -112,8 +111,6 @@ class FIXClient:
         """ Creates Socket Connection and Runs Main Loop."""
         self._reader, self._writer = await asyncio.open_connection(self._config["SocketHost"], self._config["SocketPort"], loop=loop)
         self._connectionState = SocketConnectionState.CONNECTED
-        logger.info(f"Socket Connection Open to {self._config['SocketHost']}:{self._config['SocketPort']}")
-
         self._client = FixEngine(self._config, self._reader, self._writer, self._messageListener)
 
     def loadConfig(self, filePath, gateway):
