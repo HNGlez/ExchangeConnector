@@ -31,10 +31,6 @@ import logging
 import time
 from enum import Enum
 from sessionHandler import FIXSessionHandler
-import queue
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-# logging.basicConfig(filename='logs/fix_logs.log', format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 class SocketConnectionState(Enum):
     UNKOWN = 0
@@ -59,6 +55,17 @@ class FIXConnectionHandler(object):
         self._lastLogonAttempt = 0
         self._logonCount = 0
         self._bufferSize = 128
+        self._fixLogger = self.setupLogger(name=config["BeginString"],filename=f"{config['SenderCompID']}-fixMessages")
+        self._engineLogger = self.setupLogger(name=config["SenderCompID"], filename=f"{config['SenderCompID']}-session", formatter="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+
+    def setupLogger(self, name, filename, level=logging.INFO, formatter="%(asctime)s - %(message)s"):
+        handler = logging.FileHandler(filename=f"{self._config['FileLogPath']}/{filename}.log")
+        handler.setFormatter(logging.Formatter(formatter))
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        logger.addHandler(handler)
+        return logger
 
     async def disconnect(self):
         """ Disconnect Session."""
@@ -69,20 +76,21 @@ class FIXConnectionHandler(object):
     async def handleClose(self):
         """ Handle Close Writer Socket Connection."""
         if self._connectionState == SocketConnectionState.DISCONNECTED:
-            logger.info(f"{self._config['SenderCompID']} session -> DISCONNECTED")
+            self._engineLogger.info(f"{self._config['SenderCompID']} session -> DISCONNECTED")
             self._writer.close()
             self._connectionState = SocketConnectionState.DISCONNECTED
     
     async def sendMessage(self, message: simplefix.FixMessage):
         """ Send FIX Message to Server."""
         if self._connectionState != SocketConnectionState.CONNECTED and self._connectionState != SocketConnectionState.LOGGED_IN:
+            self._engineLogger.warning("Cannot Send Message. Socket is closed or Session is LOGGED OUT")
             return
         self._session.sequenceNumHandler(message)
-        self._writer.write(message.encode())
+        message = message.encode()
+        self._writer.write(message)
         await self._writer.drain()
         self._lastMsgSent = time.time()
-
-        logger.info(f"Client Sending Message: {FIXConnectionHandler.printFix(message.encode())}")
+        self._fixLogger.info(f"{FIXConnectionHandler.printFix(message)}")
     
     async def readMessage(self):
         try:
@@ -97,13 +105,18 @@ class FIXConnectionHandler(object):
 
             if message is None:
                 return
-            logger.info(f"{self._config['SenderCompID']} Received Message: {message}")
+            self._fixLogger.info(f"{message}")
             assert isinstance(message, simplefix.FixMessage)
             await self.processMessage(message)
         except ConnectionError as e:
-            logger.error("Connection Closed.", exc_info=True)
+            self._engineLogger.error("Connection Closed Unexpected.", exc_info=True)
+            raise e
         except asyncio.CancelledError as e:
-            logger.error(f"{self._config['SenderCompID']} Read Message Timed Out")
+            self._engineLogger.error(f"{self._config['SenderCompID']} Read Message Timed Out")
+            raise e
+        except Exception as e:
+            self._engineLogger.error("Error reading message", exc_info=True)
+            raise e
     
     async def processMessage(self, message: simplefix.FixMessage):
         print("Processing Message")
@@ -113,7 +126,7 @@ class FIXConnectionHandler(object):
         beginString = message.get(8).decode()
 
         if beginString != self._config['BeginString']:
-            logger.warning(f"FIX Protocol is incorrect. Expected: {self._config['BeginString']}; Received: {beginString}")
+            self._engineLogger.warning(f"FIX Protocol is incorrect. Expected: {self._config['BeginString']}; Received: {beginString}")
             await self.disconnect()
             return
         
@@ -124,7 +137,7 @@ class FIXConnectionHandler(object):
         seqNoState, expectedSeqNo = self._session.validateRecvSeqNo(recvSeqNo)
         if seqNoState == False:
             # Unexpected sequence number. Send resend request
-            logger.info(f"Sending Resend Request of messages: {expectedSeqNo} to {recvSeqNo}")
+            self._engineLogger.info(f"Sending Resend Request of messages: {expectedSeqNo} to {recvSeqNo}")
             msg = self.clientMessage.sendResendRequest(expectedSeqNo, recvSeqNo)
             await self.sendMessage(msg)
         else:
@@ -135,16 +148,16 @@ class FIXConnectionHandler(object):
 
     async def logon(self):
         if self._logonCount >= self._config.getint('MaxReconnectAttemps'):
-            logger.warning("Max Logon attemps reached. Disconnecting")
+            self._engineLogger.warning("Max Logon attemps reached. Disconnecting")
             self.disconnect()
-        logger.info(f"{self._config['SenderCompID']} session -> Sending LOGON")
+        self._engineLogger.info(f"{self._config['SenderCompID']} session -> Sending LOGON")
         if time.time() - self._lastLogonAttempt > self._config.getint('ReconnectInterval'):
             msg = self.clientMessage.sendLogOn()
             await self.sendMessage(msg)
             self._lastLogonAttempt = time.time()
 
     async def logout(self):
-        logger.info(f"{self._config['SenderCompID']} session -> Sending LOGOUT")
+        self._engineLogger.info(f"{self._config['SenderCompID']} session -> Sending LOGOUT")
         self._connectionState = SocketConnectionState.LOGGED_OUT
         await self.sendMessage(self.clientMessage.sendLogOut())
 
@@ -152,10 +165,10 @@ class FIXConnectionHandler(object):
         if self._lastRcvMsg is None:
             return
         if time.time() - self._lastRcvMsg > heartbeatInterval:
-            logger.warning(f"Heartbeat expected not received. Missed Heartbeats: {self._missedHeartbeats}")
+            self._engineLogger.warning(f"Heartbeat expected not received. Missed Heartbeats: {self._missedHeartbeats}")
             self._missedHeartbeats += 1
         if self._missedHeartbeats >= self._config.getint('MaxMissedHeartBeats'):
-            logger.warning(f"Max Missed Heartbeats reached. Loging out")
+            self._engineLogger.warning(f"Max Missed Heartbeats reached. Loging out")
             self.logout()
 
         
@@ -165,4 +178,4 @@ class FIXConnectionHandler(object):
     
     @staticmethod
     def printFix(msg):
-        return msg.replace(b"\x01", b"|")
+        return msg.replace(b"\x01", b"|").decode()
